@@ -98,7 +98,7 @@ alias antigravity='antigravity --remote-debugging-port=9333'
 **Manual:**
 1. Copy the `src/` directory, `package.json`, and `package-lock.json` to:
    ```
-   ~/.antigravity/extensions/YazanBaker.antigravity-autoaccept-3.0.0/
+   ~/.antigravity/extensions/YazanBaker.antigravity-autoaccept-3.1.0/
    ```
 2. Run `npm install` in that directory (installs `ws` dependency)
 3. Reload Window
@@ -107,7 +107,10 @@ alias antigravity='antigravity --remote-debugging-port=9333'
 
 - **Toggle:** Click `⚡ Auto: ON` / `✕ Auto: OFF` in the status bar
 - **Or:** `Ctrl+Shift+P` → `AntiGravity AutoAccept: Toggle ON/OFF`
+- **Dashboard:** Click `📊` in the status bar to see CDP status, active sessions, and activity log
 - **Logs:** Output panel → `AntiGravity AutoAccept`
+
+![Dashboard](dashboard.png)
 
 ## Multi-Agent Workflow
 
@@ -127,17 +130,25 @@ To run multiple agents simultaneously and have the bot auto-click commands for a
 | `autoAcceptV2.pollInterval` | `500` | Polling interval in ms |
 | `autoAcceptV2.customButtonTexts` | `[]` | Extra button texts for i18n or custom prompts |
 | `autoAcceptV2.cdpPort` | `9333` | CDP port (default avoids conflict with AG Browser Control on 9222) |
+| `autoAcceptV2.autoAcceptFileEdits` | `true` | Auto-accept file edit changes (disable to review diffs manually) |
+| `autoAcceptV2.blockedCommands` | `[]` | Commands to NEVER auto-run (e.g. `rm`, `git push`, `npm publish`) |
+| `autoAcceptV2.allowedCommands` | `[]` | If set, ONLY these commands will auto-run (whitelist mode) |
+
+> **Tip:** Settings are hot-reloaded — changes take effect immediately without restarting.
 
 ## How it Works
 
-### Persistent CDP + MutationObserver (v3.0.0)
+### Persistent CDP + MutationObserver (v3.0.0+)
 The extension maintains a **persistent browser-level WebSocket** connection to Chromium's DevTools Protocol. Instead of polling every 1.5s, it injects a **MutationObserver** payload once per target. The observer reacts instantly when React mounts new button elements, with 100ms leading-edge throttle to prevent CPU spikes during streaming output.
+
+### Single-Pass DOM Scanner (v3.1.0)
+The button scanner walks the DOM tree **exactly once** per cycle, checking all keywords simultaneously against each node. This is O(D) instead of the previous O(N×D) which could cause UI freezes with many keywords. Priority-aware matching ensures `Run` always beats `Accept`, which always beats `Allow`, regardless of DOM order.
 
 ### Webview Guard
 Antigravity's agent panel runs in an isolated Chromium process (OOPIF). The injected script uses a deferred `isAgentPanel()` check inside `scanAndClick()` — verifying `.react-app-container` existence dynamically on each scan rather than at injection time. This avoids a race condition where the DOM is unhydrated on `targetCreated`.
 
 ### Button Detection
-Inside the agent panel, a `TreeWalker` searches for buttons by text content using `startsWith` matching:
+Inside the agent panel, a `TreeWalker` searches for buttons by text content using `startsWith` matching with **word-boundary checks** to prevent false positives (e.g. `accept-test.js` won't match `accept`):
 
 | Priority | Text | Matches |
 |---|---|---|
@@ -149,9 +160,12 @@ Inside the agent panel, a `TreeWalker` searches for buttons by text content usin
 | 6 | `retry` | Retry prompts |
 | 7 | `continue` | Agent invocation limit resume |
 
+### Command Filtering (v3.1.0)
+Blocked and allowed command lists use **word-boundary matching** against the code block above a Run button. For example, blocking `rm` will block `rm -rf /tmp` but NOT `yarn format` or `npm run build`.
+
 ### CDP Auto-Fix
 On activation, the extension checks if port 9333 is open (with 9222 fallback). If not, it shows a notification with:
-- **Auto-Fix Shortcut (Windows)** — patches your `.lnk` shortcut via PowerShell
+- **Auto-Fix Shortcut (Windows)** — patches `.lnk` shortcuts on Desktop, Start Menu, **and Taskbar**
 - **Manual Guide** — links to this README
 
 ## Troubleshooting
@@ -198,7 +212,7 @@ Antigravity's agent panel runs in an isolated Chromium process. The VS Code Exte
 **Is it safe?**
 
 - **Localhost only** — the port binds to `127.0.0.1`, not `0.0.0.0`. No external machine can connect.
-- **Fully open source** — all ~900 lines are on GitHub. The extension finds buttons by text and clicks them. No data is read, no network requests, no telemetry.
+- **Fully open source** — the extension finds buttons by text and clicks them. No data is read, no network requests, no telemetry.
 - **Standard dev workflow** — `--remote-debugging-port` is the same flag used by VS Code extension developers and Electron app debugging.
 - **Shortcut patcher is scoped** — the auto-fix only modifies `.lnk` files whose target path contains "Antigravity".
 

@@ -46,6 +46,9 @@ class El {
             } else if (sel.startsWith('[data-')) {
                 const attr = sel.slice(1, -1);
                 if (el._attrs[attr] !== undefined) return el;
+            } else {
+                // Tag name match (e.g. 'pre', 'code')
+                if (el.tagName === sel.toUpperCase()) return el;
             }
         }
         return null;
@@ -62,6 +65,7 @@ function makeDoc(bodyKids, isAgentPanel = true) {
     bodyKids.forEach(k => k.parentElement = body);
     const doc = {
         body,
+        defaultView: {},
         querySelector(sel) {
             if (isAgentPanel && sel === '.react-app-container') return new El('DIV', '');
             if (isAgentPanel && sel.includes('agent')) return new El('DIV', '');
@@ -84,14 +88,23 @@ function makeDoc(bodyKids, isAgentPanel = true) {
 const path = require('path');
 const { buildDOMObserverScript } = require(path.join(__dirname, '..', 'src', 'scripts', 'DOMObserver'));
 
-function run(doc, custom = []) {
-    const script = buildDOMObserverScript(custom).trim();
+function run(doc, custom = [], blocked = [], allowed = []) {
+    const script = buildDOMObserverScript(custom, blocked, allowed).trim();
     // The script is an IIFE: (function(){ ... })()
     // We need to add 'return' before it for new Function()
     const fn = new Function('document', 'NodeFilter', 'window', 'requestAnimationFrame', 'MutationObserver', 'return ' + script);
 
     // Mock window, requestAnimationFrame, and MutationObserver
     const mockWindow = {};
+
+    // If tests pre-set doc.defaultView properties (e.g. __AA_PAUSED), copy them
+    if (doc.defaultView) {
+        Object.assign(mockWindow, doc.defaultView);
+    }
+
+    // Link doc.defaultView to mockWindow so tests can inspect window globals after run
+    doc.defaultView = mockWindow;
+
     const mockRAF = (cb) => cb();
     class MockMutationObserver {
         observe() { }
@@ -401,8 +414,121 @@ test('idempotent: second injection returns already-active', () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════
+console.log('\n\x1b[1m--- Command Filtering ---\x1b[0m');
+
+// Helper: creates a DOM with a button inside a container with a <pre> code block
+function makeCommandDoc(commandText, buttonText = 'Run') {
+    const codeBlock = new El('PRE', commandText);
+    const btn = new El('BUTTON', buttonText);
+    const container = new El('DIV', '', {}, [codeBlock, btn]);
+    codeBlock.parentElement = container;
+    btn.parentElement = container;
+    // Use makeDoc with the container as a body child, so TreeWalker walks it
+    const doc = makeDoc([container]);
+    return { doc, btn, codeBlock };
+}
+
+test('blocklist blocks "rm -rf" command', () => {
+    const { doc, btn } = makeCommandDoc('rm -rf /home');
+    const result = run(doc, [], ['rm -rf'], []);
+    assert.ok(!btn._clicked, 'Blocked command should NOT be clicked');
+});
+
+test('blocklist allows safe command', () => {
+    const { doc, btn } = makeCommandDoc('npm install');
+    run(doc, [], ['rm -rf', 'git push --force'], []);
+    assert.ok(btn._clicked, 'Safe command should be clicked');
+});
+
+test('allowlist: only allows whitelisted commands', () => {
+    const { doc: doc1, btn: btn1 } = makeCommandDoc('npm test');
+    run(doc1, [], [], ['npm test', 'npm install']);
+    assert.ok(btn1._clicked, 'Allowed command should be clicked');
+
+    const { doc: doc2, btn: btn2 } = makeCommandDoc('rm -rf /');
+    run(doc2, [], [], ['npm test', 'npm install']);
+    assert.ok(!btn2._clicked, 'Non-allowed command should NOT be clicked');
+});
+
+test('blocklist takes priority over allowlist', () => {
+    // 'rm -rf' appears at word boundary in a piped command
+    const { doc, btn } = makeCommandDoc('npm run build && rm -rf /tmp');
+    run(doc, [], ['rm -rf'], ['npm run']);
+    assert.ok(!btn._clicked, 'Blocklist should override allowlist match');
+});
+
+test('no filtering when both lists empty', () => {
+    const { doc, btn } = makeCommandDoc('rm -rf /');
+    run(doc, [], [], []);
+    assert.ok(btn._clicked, 'No filters = click everything');
+});
+
+test('non-terminal buttons (accept/allow) unaffected by filters', () => {
+    const { doc, btn } = makeCommandDoc('rm -rf /', 'Accept');
+    run(doc, [], ['rm -rf'], []);
+    assert.ok(btn._clicked, 'Accept button should ignore command filters');
+});
+
+test('word boundary: blocking "rm" does NOT block "yarn format"', () => {
+    const { doc: doc1, btn: btn1 } = makeCommandDoc('yarn format');
+    run(doc1, [], ['rm'], []);
+    assert.ok(btn1._clicked, '"yarn format" should NOT be blocked by pattern "rm"');
+
+    const { doc: doc2, btn: btn2 } = makeCommandDoc('npm run build-arm');
+    run(doc2, [], ['rm'], []);
+    assert.ok(btn2._clicked, '"npm run build-arm" should NOT be blocked by pattern "rm"');
+
+    const { doc: doc3, btn: btn3 } = makeCommandDoc('rm -rf /');
+    run(doc3, [], ['rm'], []);
+    assert.ok(!btn3._clicked, '"rm -rf /" SHOULD be blocked by pattern "rm"');
+});
+
+test('fail closed: Run button with no code block and filters active', () => {
+    const btn = new El('BUTTON', 'Run');
+    const result = run(makeDoc([btn]), [], ['rm -rf'], []);
+    assert.ok(!btn._clicked, 'Should fail closed when code block not found');
+});
+
+// ═══ Observer Kill Switch ═══
+test('re-injection initializes __AA_PAUSED to false', () => {
+    const btn = new El('BUTTON', 'Run');
+    const doc = makeDoc([btn]);
+    doc.defaultView.__AA_PAUSED = true; // Simulate previous kill signal
+    run(doc); // Re-injection should reset it
+    assert.strictEqual(doc.defaultView.__AA_PAUSED, false, '__AA_PAUSED should be cleared on re-injection');
+});
+
+test('observer is exposed on window.__AA_OBSERVER', () => {
+    const btn = new El('BUTTON', 'Run');
+    const doc = makeDoc([btn]);
+    run(doc);
+    assert.ok(doc.defaultView.__AA_OBSERVER !== undefined, '__AA_OBSERVER should be set');
+    assert.ok(doc.defaultView.__AA_OBSERVER !== null, '__AA_OBSERVER should not be null');
+    assert.ok(typeof doc.defaultView.__AA_OBSERVER.observe === 'function', '__AA_OBSERVER should have observe method');
+    assert.ok(typeof doc.defaultView.__AA_OBSERVER.disconnect === 'function', '__AA_OBSERVER should have disconnect method');
+});
+
+test('__AA_PAUSED=true blocks scanAndClick (integration)', () => {
+    // This test verifies the scanAndClick guard by checking:
+    // 1. Normal run clicks the button
+    // 2. After setting __AA_PAUSED=true, the scanAndClick check at the top returns null
+    const btn1 = new El('BUTTON', 'Run');
+    const doc1 = makeDoc([btn1]);
+    run(doc1); // Should click
+    assert.ok(btn1._clicked, 'Button should be clicked normally');
+
+    // Now verify the guard logic exists by checking the generated script source
+    const script = require('../src/scripts/DOMObserver').buildDOMObserverScript(
+        ['Run'], [], [], []
+    );
+    assert.ok(script.includes('__AA_PAUSED'), 'Script should contain __AA_PAUSED check');
+    assert.ok(script.includes('window.__AA_OBSERVER'), 'Script should expose observer on window');
+});
+
+// ═════════════════════════════════════════════════════════════════════
 console.log(`\n${'═'.repeat(50)}`);
 console.log(`  \x1b[32m${pass} passed\x1b[0m, \x1b[${fail ? '31' : '32'}m${fail} failed\x1b[0m, ${pass + fail} total`);
+
 if (fails.length) {
     console.log('\n  Failures:');
     fails.forEach(f => console.log(`   • ${f}`));

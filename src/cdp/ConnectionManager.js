@@ -27,11 +27,94 @@ class ConnectionManager {
         this.ignoredTargets = new Set();    // targetIds rejected (no-dom, not-agent-panel)
         this.activeCdpPort = null;
 
+        // Command filters (set by extension.js from user config)
+        this.blockedCommands = [];
+        this.allowedCommands = [];
+        this.autoAcceptFileEdits = true;
+
         // Lifecycle
         this.isRunning = false;
+        this.isPaused = false; // Soft toggle: true = stop clicking, keep WS alive
         this.isConnecting = false;
         this.reconnectTimer = null;
         this.heartbeatTimer = null;
+        this.onStatusChange = null; // Callback when CDP status changes
+    }
+
+    /**
+     * Updates the command filter lists. Called by extension.js when config changes.
+     * @param {string[]} blocked - Patterns to never auto-run
+     * @param {string[]} allowed - If non-empty, only auto-run matching patterns
+     */
+    setCommandFilters(blocked, allowed) {
+        this.blockedCommands = blocked || [];
+        this.allowedCommands = allowed || [];
+    }
+
+    /**
+     * Hot-reloads filter config into all live CDP sessions via Runtime.evaluate.
+     * Overwrites window.__AA_* globals without re-injecting the full script
+     * (which would create duplicate MutationObserver instances).
+     */
+    async pushFilterUpdate(blocked, allowed) {
+        if (!this.ws || this.sessions.size === 0) return;
+        const hasFilters = (blocked.length > 0 || allowed.length > 0);
+        const expr = `
+            window.__AA_BLOCKED = ${JSON.stringify(blocked)};
+            window.__AA_ALLOWED = ${JSON.stringify(allowed)};
+            window.__AA_HAS_FILTERS = ${hasFilters};
+            'filters-updated';
+        `;
+        for (const [targetId, sessionId] of this.sessions) {
+            try {
+                await this._send('Runtime.evaluate', { expression: expr }, sessionId);
+                this.log(`[CDP] Pushed filter update to session ${targetId.substring(0, 6)}`);
+            } catch (e) {
+                // Session may have been destroyed — ignore
+            }
+        }
+    }
+    /**
+     * Re-injects the DOMObserver on all active sessions.
+     * Safe: IDEMPOTENCY_GUARD + self-healing in DOMObserver disconnects old observer.
+     * Used when button text list changes (e.g., autoAcceptFileEdits toggle).
+     */
+    reinjectAll() {
+        if (!this.ws || this.sessions.size === 0) return;
+        // Reset idempotency flags so re-injection proceeds
+        const resetExpr = 'window.__AA_OBSERVER_ACTIVE = false; "reset"';
+        for (const [targetId, sessionId] of this.sessions) {
+            this._send('Runtime.evaluate', { expression: resetExpr }, sessionId)
+                .then(() => this._injectObserver(sessionId))
+                .then(result => this.log(`[CDP] Re-injected [${targetId.substring(0, 6)}] → ${result}`))
+                .catch(e => this.log(`[CDP] Reinject failed for ${targetId.substring(0, 6)}: ${e.message}`));
+        }
+    }
+
+    /**
+     * Kill signal: pauses all injected observers and disconnects them.
+     * Must be called BEFORE closing the WebSocket (fire-and-forget).
+     * Sets __AA_PAUSED=true for immediate click suppression,
+     * then disconnects the MutationObserver to stop DOM watching.
+     */
+    _disableObservers() {
+        if (!this.ws || this.sessions.size === 0) return;
+        const killExpr = `
+            window.__AA_PAUSED = true;
+            if (window.__AA_OBSERVER) {
+                window.__AA_OBSERVER.disconnect();
+                window.__AA_OBSERVER = null;
+            }
+            'observers-killed';
+        `;
+        for (const [targetId, sessionId] of this.sessions) {
+            try {
+                this._send('Runtime.evaluate', { expression: killExpr }, sessionId);
+                this.log(`[CDP] Sent kill signal to session ${targetId.substring(0, 6)}`);
+            } catch (e) {
+                this.log(`[CDP] Kill signal failed for ${targetId.substring(0, 6)}: ${e.message}`);
+            }
+        }
     }
 
     // ─── Public API ───────────────────────────────────────────────────
@@ -39,16 +122,54 @@ class ConnectionManager {
     start() {
         if (this.isRunning) return;
         this.isRunning = true;
+        this.isPaused = false;
         this.log('[CDP] Connection manager starting');
         this.connect();
     }
 
+    /**
+     * Soft toggle OFF: pause all observers but keep the WS connection alive.
+     * Use this for the UI toggle — avoids WS teardown/reconnect race conditions.
+     */
+    pause() {
+        this.isPaused = true;
+        const pauseExpr = 'window.__AA_PAUSED = true; "paused"';
+        for (const [targetId, sessionId] of this.sessions) {
+            this._send('Runtime.evaluate', { expression: pauseExpr }, sessionId)
+                .then(() => this.log(`[CDP] Paused session ${targetId.substring(0, 6)}`))
+                .catch(e => this.log(`[CDP] Pause failed for ${targetId.substring(0, 6)}: ${e.message}`));
+        }
+        this.log('[CDP] All sessions paused');
+        if (this.onStatusChange) this.onStatusChange();
+    }
+
+    /**
+     * Soft toggle ON: unpause all observers. No re-injection needed.
+     */
+    unpause() {
+        this.isPaused = false;
+        const unpauseExpr = 'window.__AA_PAUSED = false; "unpaused"';
+        for (const [targetId, sessionId] of this.sessions) {
+            this._send('Runtime.evaluate', { expression: unpauseExpr }, sessionId)
+                .then(() => this.log(`[CDP] Unpaused session ${targetId.substring(0, 6)}`))
+                .catch(e => this.log(`[CDP] Unpause failed for ${targetId.substring(0, 6)}: ${e.message}`));
+        }
+        this.log('[CDP] All sessions unpaused');
+        if (this.onStatusChange) this.onStatusChange();
+    }
+
+    /**
+     * Full teardown: only for extension deactivation, NOT for UI toggle.
+     * Strips WS listeners to prevent ghost close events.
+     */
     stop() {
         this.isRunning = false;
+        this.isPaused = false;
         clearTimeout(this.reconnectTimer);
         this.reconnectTimer = null;
         clearInterval(this.heartbeatTimer);
         this.heartbeatTimer = null;
+        this._disableObservers();
         this._closeWebSocket();
         this.sessions.clear();
         this.ignoredTargets.clear();
@@ -105,6 +226,7 @@ class ConnectionManager {
                 clearTimeout(timeout);
                 this.ws = ws;
                 this.log('[CDP] Persistent connection established');
+                if (this.onStatusChange) this.onStatusChange();
 
                 try {
                     await this._initializeTargetDiscovery();
@@ -124,7 +246,11 @@ class ConnectionManager {
 
             ws.on('close', () => {
                 clearTimeout(timeout);
-                this._onClose();
+                // Only run cleanup if THIS ws is still the active connection.
+                // Prevents stale close events from wiping a newly-established session.
+                if (this.ws === ws) {
+                    this._onClose();
+                }
             });
 
             ws.on('error', () => {
@@ -177,6 +303,7 @@ class ConnectionManager {
         this._clearPending();
         clearInterval(this.heartbeatTimer);
         this.heartbeatTimer = null;
+        if (this.onStatusChange) this.onStatusChange();
 
         if (this.isRunning) {
             this._scheduleReconnect();
@@ -212,19 +339,29 @@ class ConnectionManager {
 
     async _handleNewTarget(targetInfo) {
         const { targetId, type, url } = targetInfo;
-        if (!this._isCandidate(targetInfo)) return;
-        if (this.sessions.has(targetId)) return;
-        if (this.ignoredTargets.has(targetId)) return;
-
         const shortId = targetId.substring(0, 6);
+
+        if (!this._isCandidate(targetInfo)) {
+            return;
+        }
+        if (this.sessions.has(targetId)) {
+            return;
+        }
+        if (this.ignoredTargets.has(targetId)) {
+            return;
+        }
 
         try {
             const attachMsg = await this._send('Target.attachToTarget', { targetId, flatten: true });
             const sessionId = attachMsg.result?.sessionId;
-            if (!sessionId) return;
+            if (!sessionId) {
+                this.log(`[CDP] [${shortId}] No sessionId returned. Error: ${JSON.stringify(attachMsg.error || 'none')}`);
+                return;
+            }
 
-            // Enable Runtime events for this session (to detect context clears/navigation)
-            await this._send('Runtime.enable', {}, sessionId).catch(() => { });
+            // Enable Runtime events for this session
+            await this._send('Runtime.enable', {}, sessionId)
+                .catch(e => this.log(`[CDP] [${shortId}] Runtime.enable failed: ${e.message}`));
 
             // For page targets, verify DOM access before injecting
             if (type === 'page') {
@@ -233,17 +370,21 @@ class ConnectionManager {
                 }, sessionId);
                 const domResult = domCheck.result?.result?.value;
                 if (!domResult || domResult === 'no-dom') {
-                    await this._send('Target.detachFromTarget', { sessionId }).catch(() => { });
+                    this.log(`[CDP] [${shortId}] No DOM access, detaching`);
+                    await this._send('Target.detachFromTarget', { sessionId })
+                        .catch(e => this.log(`[CDP] [${shortId}] Detach failed: ${e.message}`));
                     this.ignoredTargets.add(targetId);
                     return;
                 }
             }
 
-            // Inject MutationObserver payload (one-shot — observer runs autonomously)
+            // Inject MutationObserver payload
             const result = await this._injectObserver(sessionId);
 
             if (result === 'not-agent-panel') {
-                await this._send('Target.detachFromTarget', { sessionId }).catch(() => { });
+                this.log(`[CDP] [${shortId}] Not an agent panel, detaching`);
+                await this._send('Target.detachFromTarget', { sessionId })
+                    .catch(e => this.log(`[CDP] [${shortId}] Detach failed: ${e.message}`));
                 this.ignoredTargets.add(targetId);
                 return;
             }
@@ -251,8 +392,15 @@ class ConnectionManager {
             // Keep session alive in pool
             this.sessions.set(targetId, sessionId);
             this.log(`[CDP] ✓ Attached [${shortId}] → ${result} (${(url || '').substring(0, 50)})`);
+
+            // If extension is currently paused, immediately pause this new session
+            if (this.isPaused) {
+                this._send('Runtime.evaluate', {
+                    expression: 'window.__AA_PAUSED = true; "paused-on-attach"'
+                }, sessionId).catch(e => this.log(`[CDP] [${shortId}] Pause-on-attach failed: ${e.message}`));
+            }
         } catch (e) {
-            // Target may have been destroyed — silent
+            this.log(`[CDP] [${shortId}] Attach error: ${e.message}`);
         }
     }
 
@@ -279,7 +427,12 @@ class ConnectionManager {
     // ─── Observer Injection ───────────────────────────────────────────
 
     async _injectObserver(sessionId) {
-        const script = buildDOMObserverScript(this.getCustomTexts());
+        const script = buildDOMObserverScript(
+            this.getCustomTexts(),
+            this.blockedCommands,
+            this.allowedCommands,
+            this.autoAcceptFileEdits
+        );
         const evalMsg = await this._send('Runtime.evaluate', { expression: script }, sessionId);
         return evalMsg.result?.result?.value || 'undefined';
     }
@@ -403,7 +556,12 @@ class ConnectionManager {
 
     _closeWebSocket() {
         if (this.ws) {
-            try { this.ws.close(); } catch (e) { }
+            // Strip all listeners before closing to prevent ghost close events
+            // from corrupting state after a new connection is established
+            this.ws.removeAllListeners();
+            try { this.ws.close(); } catch (e) {
+                this.log(`[CDP] WS close error: ${e.message}`);
+            }
             this.ws = null;
         }
     }

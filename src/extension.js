@@ -6,27 +6,101 @@ const vscode = require('vscode');
 const cp = require('child_process');
 const http = require('http');
 const { ConnectionManager } = require('./cdp/ConnectionManager');
+const { DashboardProvider } = require('./dashboard/DashboardProvider');
 
 // ─── VS Code Commands ─────────────────────────────────────────────────
 // Only Antigravity-specific commands — generic VS Code commands like
 // chatEditing.acceptAllFiles cause sidebar interference (Outline toggling,
 // folder collapsing) when the agent panel lacks focus.
-const ACCEPT_COMMANDS = [
+const ALL_ACCEPT_COMMANDS = [
     'antigravity.agent.acceptAgentStep',
     'antigravity.terminalCommand.accept',
     'antigravity.terminalCommand.run',
     'antigravity.command.accept',
 ];
 
+// Terminal commands that Channel 1 fires blindly (no context awareness).
+// When blocklist/allowlist is configured, these MUST be removed from Channel 1
+// to force the extension to rely on Channel 2's DOM-based command inspection.
+const TERMINAL_COMMANDS = [
+    'antigravity.terminalCommand.accept',
+    'antigravity.terminalCommand.run',
+];
+
+/**
+ * Cached configuration state — refreshed via onDidChangeConfiguration,
+ * never read from registry on every poll tick (avoids I/O spam).
+ */
+let cachedAutoAcceptFileEdits = true;
+let cachedBlockedCommands = [];
+let cachedAllowedCommands = [];
+let cachedHasFilters = false;
+
+function refreshConfig() {
+    const config = vscode.workspace.getConfiguration('autoAcceptV2');
+    const newFileEdits = config.get('autoAcceptFileEdits', true);
+    const newBlocked = config.get('blockedCommands', []);
+    const newAllowed = config.get('allowedCommands', []);
+    const newHasFilters = newBlocked.length > 0 || newAllowed.length > 0;
+
+    // Log only on transitions
+    if (newHasFilters !== cachedHasFilters) {
+        log(newHasFilters
+            ? `[Config] Command filters active — terminal commands deferred to Channel 2`
+            : `[Config] Command filters removed — terminal commands restored to Channel 1`);
+    }
+
+    cachedAutoAcceptFileEdits = newFileEdits;
+    cachedBlockedCommands = newBlocked;
+    cachedAllowedCommands = newAllowed;
+    cachedHasFilters = newHasFilters;
+
+    // Hot-reload: push updated config to live CDP sessions
+    if (connectionManager) {
+        connectionManager.setCommandFilters(newBlocked, newAllowed);
+        connectionManager.pushFilterUpdate(newBlocked, newAllowed);
+
+        // Re-inject observers when file edit setting changes (button list is baked at inject time)
+        if (connectionManager.autoAcceptFileEdits !== newFileEdits) {
+            connectionManager.autoAcceptFileEdits = newFileEdits;
+            connectionManager.reinjectAll();
+        }
+    }
+}
+
+/**
+ * Builds the command list from cached config (no I/O per tick).
+ */
+function getActiveCommands() {
+    let commands = [...ALL_ACCEPT_COMMANDS];
+
+    if (!cachedAutoAcceptFileEdits) {
+        commands = commands.filter(c => c !== 'antigravity.agent.acceptAgentStep');
+    }
+
+    if (cachedHasFilters) {
+        commands = commands.filter(c => !TERMINAL_COMMANDS.includes(c));
+    }
+
+    return commands;
+}
+
 let isEnabled = false;
 let pollIntervalId = null;
 let statusBarItem = null;
 let outputChannel = null;
 let connectionManager = null;
+let dashboardProvider = null;
 
 function log(msg) {
     if (outputChannel) {
         outputChannel.appendLine(`${new Date().toLocaleTimeString()} ${msg}`);
+    }
+    // Push to dashboard activity log
+    if (dashboardProvider) {
+        const type = msg.includes('blocked') || msg.includes('BLOCK') ? 'blocked'
+            : msg.includes('clicked') || msg.includes('CLICK') ? 'click' : 'info';
+        dashboardProvider.pushActivity(msg, type);
     }
 }
 
@@ -49,40 +123,42 @@ function startPolling() {
 
     const config = vscode.workspace.getConfiguration('autoAcceptV2');
     const interval = config.get('pollInterval', 500);
-    log(`Polling started (every ${interval}ms, ${ACCEPT_COMMANDS.length} commands)`);
+    const activeCommands = getActiveCommands();
+    log(`Polling started (every ${interval}ms, ${activeCommands.length} commands)`);
 
     // Recursive setTimeout pattern — guarantees strict sequential execution.
-    // Unlike setInterval, the next cycle only starts AFTER the current one
-    // fully completes, eliminating the race condition where a safety timer
-    // could break a subsequent cycle's lock.
     async function pollCycle() {
         if (!isEnabled) return;
+        // Re-read active commands each cycle so config changes take effect live
+        const cmds = getActiveCommands();
         try {
-            // Promise.race ensures the loop continues even if VS Code API hangs.
-            // If executeCommand doesn't resolve within 3s, the timeout wins and
-            // the next cycle is scheduled regardless.
             const timeoutPromise = new Promise(resolve => setTimeout(resolve, 3000));
             const commandsPromise = Promise.allSettled(
-                ACCEPT_COMMANDS.map(cmd => vscode.commands.executeCommand(cmd))
+                cmds.map(cmd => vscode.commands.executeCommand(cmd))
             );
             await Promise.race([commandsPromise, timeoutPromise]);
         } catch (e) { /* silent */ }
-        // Schedule next cycle only after this one completes
         if (isEnabled) {
             pollIntervalId = setTimeout(pollCycle, interval);
         }
     }
     pollIntervalId = setTimeout(pollCycle, interval);
 
-    // Start persistent CDP connection manager
+    // Start/unpause persistent CDP connection
     if (connectionManager) {
-        connectionManager.start();
+        if (connectionManager.isRunning) {
+            connectionManager.unpause(); // Already connected — just unpause
+        } else {
+            connectionManager.start(); // First time — establish WS connection
+        }
     }
 }
 
 function stopPolling() {
     if (pollIntervalId) { clearTimeout(pollIntervalId); pollIntervalId = null; }
-    if (connectionManager) { connectionManager.stop(); }
+    if (connectionManager && connectionManager.isRunning) {
+        connectionManager.pause(); // Soft toggle — keep WS alive
+    }
     log('Polling stopped');
 }
 
@@ -135,7 +211,7 @@ function applyPermanentWindowsPatch(targetPort) {
     const psContent = `
 $flag = "--remote-debugging-port=${targetPort}"
 $WshShell = New-Object -comObject WScript.Shell
-$paths = @("$env:USERPROFILE\\\\Desktop", "$env:PUBLIC\\\\Desktop", "$env:APPDATA\\\\Microsoft\\\\Windows\\\\Start Menu\\\\Programs", "$env:ALLUSERSPROFILE\\\\Microsoft\\\\Windows\\\\Start Menu\\\\Programs")
+$paths = @("$env:USERPROFILE\\\\Desktop", "$env:PUBLIC\\\\Desktop", "$env:APPDATA\\\\Microsoft\\\\Windows\\\\Start Menu\\\\Programs", "$env:ALLUSERSPROFILE\\\\Microsoft\\\\Windows\\\\Start Menu\\\\Programs", "$env:APPDATA\\\\Microsoft\\\\Internet Explorer\\\\Quick Launch\\\\User Pinned\\\\TaskBar")
 $patched = $false
 $manualFixNeeded = $false
 $patchedLnk = $null
@@ -244,10 +320,49 @@ function activate(context) {
         getCustomTexts: () => vscode.workspace.getConfiguration('autoAcceptV2').get('customButtonTexts', [])
     });
 
+    // Refresh dashboard when CDP status changes (connect/disconnect)
+    connectionManager.onStatusChange = () => {
+        if (dashboardProvider) dashboardProvider.refresh();
+    };
+
+    // Initialize cached config state
+    refreshConfig();
+
+    // Hot-reload: watch for config changes and push to live CDP sessions
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeConfiguration(e => {
+            if (e.affectsConfiguration('autoAcceptV2')) {
+                refreshConfig();
+                if (dashboardProvider) dashboardProvider.refresh();
+            }
+        })
+    );
+
+    // Dashboard provider
+    dashboardProvider = new DashboardProvider(context, log, () => ({
+        isEnabled,
+        cdpConnected: connectionManager ? !!connectionManager.ws : false,
+        sessionCount: connectionManager ? connectionManager.sessions.size : 0
+    }));
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('autoAcceptV2.dashboard', () => {
+            dashboardProvider.show();
+        })
+    );
+
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     statusBarItem.command = 'autoAcceptV2.toggle';
     context.subscriptions.push(statusBarItem);
     statusBarItem.show();
+
+    // Dashboard button in status bar — right next to the toggle
+    const dashboardStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
+    dashboardStatusBar.text = '$(dashboard) Dashboard';
+    dashboardStatusBar.command = 'autoAcceptV2.dashboard';
+    dashboardStatusBar.tooltip = 'Open AutoAccept Dashboard';
+    context.subscriptions.push(dashboardStatusBar);
+    dashboardStatusBar.show();
 
     context.subscriptions.push(
         vscode.commands.registerCommand('autoAcceptV2.toggle', () => {
@@ -255,6 +370,7 @@ function activate(context) {
             log(`Toggled: ${isEnabled ? 'ON' : 'OFF'}`);
             if (isEnabled) { startPolling(); } else { stopPolling(); }
             updateStatusBar();
+            if (dashboardProvider) dashboardProvider.refresh();
             context.globalState.update('autoAcceptV2Enabled', isEnabled);
             vscode.window.showInformationMessage(
                 `AntiGravity AutoAccept: ${isEnabled ? 'ENABLED ⚡' : 'DISABLED 🔴'}`
@@ -280,6 +396,7 @@ function activate(context) {
 
 function deactivate() {
     stopPolling();
+    if (connectionManager) connectionManager.stop(); // Full teardown on deactivation
     if (outputChannel) outputChannel.dispose();
 }
 

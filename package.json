@@ -2,7 +2,7 @@
     "name": "antigravity-autoaccept",
     "displayName": "AntiGravity AutoAccept",
     "description": "Auto-accept Run, Accept, and Always Allow buttons in Antigravity via CDP with Webview Guard isolation.",
-    "version": "3.0.0",
+    "version": "3.1.0",
     "publisher": "YazanBaker",
     "icon": "images/icon.png",
     "engines": {
@@ -20,6 +20,10 @@
             {
                 "command": "autoAcceptV2.toggle",
                 "title": "Auto Accept V2: Toggle ON/OFF"
+            },
+            {
+                "command": "autoAcceptV2.dashboard",
+                "title": "Auto Accept V2: Open Dashboard"
             }
         ],
         "configuration": {
@@ -42,6 +46,27 @@
                     "type": "number",
                     "default": 9333,
                     "description": "The localhost port for Chrome DevTools Protocol. (Default 9333 avoids conflicts with AG Browser Control)."
+                },
+                "autoAcceptV2.autoAcceptFileEdits": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Auto-accept file edits (acceptAgentStep). Set to false to review diffs before accepting."
+                },
+                "autoAcceptV2.blockedCommands": {
+                    "type": "array",
+                    "default": [],
+                    "items": {
+                        "type": "string"
+                    },
+                    "description": "Terminal command patterns to NEVER auto-run (e.g. 'rm -rf', 'git push --force', 'DROP TABLE'). Matched case-insensitively."
+                },
+                "autoAcceptV2.allowedCommands": {
+                    "type": "array",
+                    "default": [],
+                    "items": {
+                        "type": "string"
+                    },
+                    "description": "If non-empty, ONLY auto-run terminal commands matching these patterns. Blocklist takes priority over allowlist."
                 }
             }
         }
